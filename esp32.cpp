@@ -72,18 +72,14 @@ void renderUI() {
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
 
-  // 5x7 glyph height = 7px; 8px row pitch leaves the spare pixel below
-  // each character row (not centered), filling the 32px screen exactly.
   const int lineY[4] = {0, 8, 16, 24};
 
   for (int i = 0; i < totalLinesCount && i < 4; i++) {
     int y = lineY[i];
 
-    // Line number: flush left, 1px from border
     display.setCursor(1, y);
     display.print(displayLines[i].line);
-
-    // "XY min": flush right, 1px from border (exact pixel width, not an estimate)
+    
     int16_t bx, by;
     uint16_t bw, bh;
     display.getTextBounds(displayLines[i].text, 0, y, &bx, &by, &bw, &bh);
