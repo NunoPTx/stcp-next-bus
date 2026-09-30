@@ -5,8 +5,8 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
-const char* WIFI_SSID = "NULL";
-const char* WIFI_PASS = "NULL";
+const char* WIFI_SSID = "Vodafone-Beni";
+const char* WIFI_PASS = "Beni2@19";
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 32
@@ -27,15 +27,15 @@ BusArrival displayLines[4];
 int totalLinesCount = 0;
 
 void fetchStopData(const String& stopCode, const String& line1, const String& line2 = "") {
-  if (WiFi.status() != WL_CONNECTED || totalLinesCount >= 4) return;
-
   HTTPClient http;
   http.begin("https://stcp-proxy.onrender.com/?stop=" + stopCode);
   http.setTimeout(4000);
-
+  bool dataOk = false;
+  
   if (http.GET() == HTTP_CODE_OK) {
     JsonDocument doc;
-    if (deserializeJson(doc, http.getStream()) == DeserializationError::Ok) {
+    if (deserializeJson(doc, http.getStream()) == DeserializationError::Ok && doc["arrivals"].is<JsonArray>()) {
+      dataOk = true;
       JsonArray arrivals = doc["arrivals"].as<JsonArray>();
 
       bool foundLine1 = false;
@@ -48,23 +48,50 @@ void fetchStopData(const String& stopCode, const String& line1, const String& li
         line.trim();
 
         if (!foundLine1 && line.equalsIgnoreCase(line1)) {
-          int mins = item["arrival_minutes"].as<int>();
+          JsonVariant v = item["arrival_minutes"];
           displayLines[totalLinesCount].line = line;
-          displayLines[totalLinesCount].text = String(mins) + " min";
+          if (!v.is<float>()) displayLines[totalLinesCount].text = "- min";
+          else if (v.as<float>() < 1.0f) displayLines[totalLinesCount].text = "0 min";
+          else displayLines[totalLinesCount].text = String((int)v.as<float>()) + " min";
           totalLinesCount++;
           foundLine1 = true;
-        } 
+        }
         else if (line2.length() > 0 && !foundLine2 && line.equalsIgnoreCase(line2)) {
-          int mins = item["arrival_minutes"].as<int>();
+          JsonVariant v = item["arrival_minutes"];
           displayLines[totalLinesCount].line = line;
-          displayLines[totalLinesCount].text = String(mins) + " min";
+          if (!v.is<float>()) displayLines[totalLinesCount].text = "- min";
+          else if (v.as<float>() < 1.0f) displayLines[totalLinesCount].text = "0 min";
+          else displayLines[totalLinesCount].text = String((int)v.as<float>()) + " min";
           totalLinesCount++;
           foundLine2 = true;
         }
       }
+      if (!foundLine1 && totalLinesCount < 4) {
+        displayLines[totalLinesCount].line = line1;
+        displayLines[totalLinesCount].text = "- min";
+        totalLinesCount++;
+      }
+      if (line2.length() > 0 && !foundLine2 && totalLinesCount < 4) {
+        displayLines[totalLinesCount].line = line2;
+        displayLines[totalLinesCount].text = "- min";
+        totalLinesCount++;
+      }
     }
   }
   http.end();
+
+  if (!dataOk) {
+    if (totalLinesCount < 4) {
+      displayLines[totalLinesCount].line = line1;
+      displayLines[totalLinesCount].text = "NO DATA";
+      totalLinesCount++;
+    }
+    if (line2.length() > 0 && totalLinesCount < 4) {
+      displayLines[totalLinesCount].line = line2;
+      displayLines[totalLinesCount].text = "NO DATA";
+      totalLinesCount++;
+    }
+  }
 }
 
 void renderUI() {
@@ -79,13 +106,12 @@ void renderUI() {
 
     display.setCursor(1, y);
     display.print(displayLines[i].line);
-    
-    int16_t bx, by;
-    uint16_t bw, bh;
-    display.getTextBounds(displayLines[i].text, 0, y, &bx, &by, &bw, &bh);
-    int xRight = SCREEN_WIDTH - 1 - bw;
-    display.setCursor(xRight, y);
-    display.print(displayLines[i].text);
+
+  uint16_t bw, bh;
+  int16_t bx, by;
+  display.getTextBounds(displayLines[i].text, 0, y, &bx, &by, &bw, &bh);
+  display.setCursor(SCREEN_WIDTH - 1 - bw, y);
+  display.print(displayLines[i].text);
   }
 
   display.display();
@@ -106,24 +132,40 @@ void setup() {
   display.print("CONNECTING");
   display.display();
 
+  int wifiAttempts = 0;
+  
   WiFi.begin(WIFI_SSID, WIFI_PASS);
-  while (WiFi.status() != WL_CONNECTED) {
+  while (WiFi.status() != WL_CONNECTED && wifiAttempts < 20) {
     delay(500);
+    wifiAttempts++;
   }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    display.clearDisplay();
+    display.setCursor(1, 12);
+    display.print("WIFI FAILED");
+    display.display();
+  }
+
 }
 
 void loop() {
   if (WiFi.status() != WL_CONNECTED) {
     WiFi.reconnect();
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(10, 12);
+    display.print("NO WIFI CONNECTION");
+    display.display();
+    delay(5000);
+    return;
   }
 
   totalLinesCount = 0;
-
   fetchStopData("ALX2", "207", "504");
   fetchStopData("ALX1", "209");
   fetchStopData("PLM2", "204");
-
   renderUI();
-
   delay(15000);
 }
