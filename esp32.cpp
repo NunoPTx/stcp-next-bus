@@ -6,7 +6,7 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
-const char* WIFI_SSID = "NULL"; // DEFINE THIS
+const char* WIFI_SSID = "NULL"; // DEFINE THIS 
 const char* WIFI_PASS = "NULL"; // DEFINE THIS
 
 #define SCREEN_WIDTH 128
