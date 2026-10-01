@@ -1,20 +1,22 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
-const char* WIFI_SSID = "Vodafone-Beni";
-const char* WIFI_PASS = "Beni2@19";
+const char* WIFI_SSID = "NULL"; // DEFINE THIS
+const char* WIFI_PASS = "NULL"; // DEFINE THIS
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 32
-#define OLED_RESET    -1
+#define OLED_RESET -1
 #define OLED_I2C_ADDR 0x3C
-
 #define I2C_SDA 8
 #define I2C_SCL 9
+
+#define REFRESH_MS 10000
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
@@ -26,71 +28,55 @@ struct BusArrival {
 BusArrival displayLines[4];
 int totalLinesCount = 0;
 
+void addLine(const String& line, const String& text) {
+  if (totalLinesCount >= 4) return;
+  displayLines[totalLinesCount].line = line;
+  displayLines[totalLinesCount].text = text;
+  totalLinesCount++;
+}
+
+String formatMinutes(JsonVariant v) {
+  if (v.isNull()) return "- min";
+  float m = v.as<float>();
+  return (m < 1.0f) ? "0 min" : String((int)m) + " min";
+}
+
 void fetchStopData(const String& stopCode, const String& line1, const String& line2 = "") {
+  WiFiClientSecure client;
+  client.setInsecure();
+
   HTTPClient http;
-  http.begin("https://stcp-proxy.onrender.com/?stop=" + stopCode);
-  http.setTimeout(4000);
-  bool dataOk = false;
-  
+  http.useHTTP10(true);
+  http.setTimeout(5000);
+  http.begin(client, "https://stcp-proxy.onrender.com/?stop=" + stopCode);
+
+  JsonDocument doc;
+  bool ok = false;
+
   if (http.GET() == HTTP_CODE_OK) {
-    JsonDocument doc;
-    if (deserializeJson(doc, http.getStream()) == DeserializationError::Ok && doc["arrivals"].is<JsonArray>()) {
-      dataOk = true;
-      JsonArray arrivals = doc["arrivals"].as<JsonArray>();
-
-      bool foundLine1 = false;
-      bool foundLine2 = false;
-
-      for (JsonObject item : arrivals) {
-        if (totalLinesCount >= 4) break;
-
-        String line = item["route_short_name"].as<String>();
-        line.trim();
-
-        if (!foundLine1 && line.equalsIgnoreCase(line1)) {
-          JsonVariant v = item["arrival_minutes"];
-          displayLines[totalLinesCount].line = line;
-          if (!v.is<float>()) displayLines[totalLinesCount].text = "- min";
-          else if (v.as<float>() < 1.0f) displayLines[totalLinesCount].text = "0 min";
-          else displayLines[totalLinesCount].text = String((int)v.as<float>()) + " min";
-          totalLinesCount++;
-          foundLine1 = true;
-        }
-        else if (line2.length() > 0 && !foundLine2 && line.equalsIgnoreCase(line2)) {
-          JsonVariant v = item["arrival_minutes"];
-          displayLines[totalLinesCount].line = line;
-          if (!v.is<float>()) displayLines[totalLinesCount].text = "- min";
-          else if (v.as<float>() < 1.0f) displayLines[totalLinesCount].text = "0 min";
-          else displayLines[totalLinesCount].text = String((int)v.as<float>()) + " min";
-          totalLinesCount++;
-          foundLine2 = true;
-        }
-      }
-      if (!foundLine1 && totalLinesCount < 4) {
-        displayLines[totalLinesCount].line = line1;
-        displayLines[totalLinesCount].text = "- min";
-        totalLinesCount++;
-      }
-      if (line2.length() > 0 && !foundLine2 && totalLinesCount < 4) {
-        displayLines[totalLinesCount].line = line2;
-        displayLines[totalLinesCount].text = "- min";
-        totalLinesCount++;
-      }
-    }
+    String payload = http.getString();
+    ok = (deserializeJson(doc, payload) == DeserializationError::Ok) &&
+         doc["arrivals"].is<JsonArray>();
   }
   http.end();
 
-  if (!dataOk) {
-    if (totalLinesCount < 4) {
-      displayLines[totalLinesCount].line = line1;
-      displayLines[totalLinesCount].text = "NO DATA";
-      totalLinesCount++;
+  const String wanted[2] = {line1, line2};
+  for (int w = 0; w < 2; w++) {
+    if (wanted[w].length() == 0) continue;
+
+    String text = ok ? "- min" : "NO DATA";
+    if (ok) {
+      for (JsonObject item : doc["arrivals"].as<JsonArray>()) {
+        String line = item["route_short_name"] | "";
+        line.trim();
+        if (line.equalsIgnoreCase(wanted[w])) {
+          JsonVariant v = item["arrival_minutes"];
+          text = formatMinutes(v);
+          break;
+        }
+      }
     }
-    if (line2.length() > 0 && totalLinesCount < 4) {
-      displayLines[totalLinesCount].line = line2;
-      displayLines[totalLinesCount].text = "NO DATA";
-      totalLinesCount++;
-    }
+    addLine(wanted[w], text);
   }
 }
 
@@ -101,71 +87,63 @@ void renderUI() {
 
   const int lineY[4] = {0, 8, 16, 24};
 
-  for (int i = 0; i < totalLinesCount && i < 4; i++) {
+  for (int i = 0; i < totalLinesCount; i++) {
     int y = lineY[i];
 
     display.setCursor(1, y);
     display.print(displayLines[i].line);
 
-  uint16_t bw, bh;
-  int16_t bx, by;
-  display.getTextBounds(displayLines[i].text, 0, y, &bx, &by, &bw, &bh);
-  display.setCursor(SCREEN_WIDTH - 1 - bw, y);
-  display.print(displayLines[i].text);
+    int16_t bx, by;
+    uint16_t bw, bh;
+    display.getTextBounds(displayLines[i].text, 0, y, &bx, &by, &bw, &bh);
+    display.setCursor(SCREEN_WIDTH - 1 - bw, y);
+    display.print(displayLines[i].text);
   }
 
   display.display();
 }
 
-void setup() {
-  Serial.begin(115200);
+void showMessage(const char* msg) {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(1, 12);
+  display.print(msg);
+  display.display();
+}
 
+void setup() {
   Wire.begin(I2C_SDA, I2C_SCL);
   if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_I2C_ADDR)) {
     for (;;);
   }
 
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(1, 12);
-  display.print("CONNECTING");
-  display.display();
+  showMessage("CONNECTING...");
 
-  int wifiAttempts = 0;
-  
+  WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
-  while (WiFi.status() != WL_CONNECTED && wifiAttempts < 20) {
+  for (int i = 0; i < 30 && WiFi.status() != WL_CONNECTED; i++) {
     delay(500);
-    wifiAttempts++;
   }
 
   if (WiFi.status() != WL_CONNECTED) {
-    display.clearDisplay();
-    display.setCursor(1, 12);
-    display.print("WIFI FAILED");
-    display.display();
+    showMessage("WIFI FAILED");
   }
-
 }
 
 void loop() {
   if (WiFi.status() != WL_CONNECTED) {
     WiFi.reconnect();
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(10, 12);
-    display.print("NO WIFI CONNECTION");
-    display.display();
+    showMessage("NO WIFI");
     delay(5000);
     return;
   }
 
   totalLinesCount = 0;
-  fetchStopData("ALX2", "207", "504");
-  fetchStopData("ALX1", "209");
-  fetchStopData("PLM2", "204");
+  fetchStopData("ID1", "LINE1", "LINE2");
+  fetchStopData("ID2", "LINE1");
+  fetchStopData("ID3", "LINE1");
   renderUI();
-  delay(15000);
+
+  delay(REFRESH_MS);
 }
